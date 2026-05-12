@@ -101,3 +101,105 @@ jobs:
       - name: Run MAVFTP unit tests
         run: |
           ctest --test-dir /tmp/apm-planner-cmake --output-on-failure
+
+  sitl-mavftp-integration:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout APM Planner
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Checkout ArduPilot
+        uses: actions/checkout@v4
+        with:
+          repository: ArduPilot/ardupilot
+          path: ardupilot
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install APM Planner dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            ccache \
+            cmake \
+            flite1-dev \
+            gawk \
+            git \
+            libgl1-mesa-dev \
+            libsndfile1-dev \
+            libsdl1.2-dev \
+            libsdl2-dev \
+            libssl-dev \
+            libtool \
+            libudev-dev \
+            libxkbcommon-x11-0 \
+            libxcb-xinerama0 \
+            libxml2-dev \
+            libxslt1-dev \
+            ninja-build \
+            python3-dev \
+            python3-pip \
+            python3-pexpect \
+            python3-serial \
+            qtbase5-dev \
+            qtdeclarative5-dev \
+            qt5-qmake \
+            libqt5datavisualization5-dev \
+            libqt5opengl5-dev \
+            libqt5serialport5-dev \
+            libqt5svg5-dev
+
+      - name: Install ArduPilot prerequisites
+        working-directory: ardupilot
+        run: |
+          Tools/environment_install/install-prereqs-ubuntu.sh -y
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build APM Planner SITL test
+        run: |
+          cmake -S "$GITHUB_WORKSPACE" -B /tmp/apm-planner-sitl -G Ninja -DBUILD_MAVFTP_SITL_TESTS=ON
+          cmake --build /tmp/apm-planner-sitl --target mavftp_sitl_tests --parallel 2
+
+      - name: Build ArduPilot SITL
+        working-directory: ardupilot
+        run: |
+          ./waf configure --board sitl
+          ./waf copter --jobs 2
+
+      - name: Start ArduPilot SITL
+        working-directory: ardupilot
+        run: |
+          mkdir -p /tmp/ardupilot-sitl
+          python3 Tools/autotest/sim_vehicle.py \
+            -v ArduCopter \
+            -f quad \
+            --no-mavproxy \
+            --udp \
+            --no-extra-ports \
+            --no-rebuild \
+            --use-dir /tmp/ardupilot-sitl \
+            > /tmp/ardupilot-sitl.log 2>&1 &
+          echo $! > /tmp/ardupilot-sitl.pid
+
+      - name: Run MAVFTP SITL integration test
+        env:
+          MAVFTP_SITL_UDP_PORT: "5760"
+        run: |
+          /tmp/apm-planner-sitl/mavftp_sitl_tests
+
+      - name: Show SITL log on failure
+        if: failure()
+        run: |
+          cat /tmp/ardupilot-sitl.log || true
+
+      - name: Stop ArduPilot SITL
+        if: always()
+        run: |
+          if [ -f /tmp/ardupilot-sitl.pid ]; then
+            kill "$(cat /tmp/ardupilot-sitl.pid)" || true
+          fi

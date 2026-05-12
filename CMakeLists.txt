@@ -816,6 +816,30 @@ if(BUILD_MAVFTP_TESTS)
     add_test(NAME mavftp_unit_tests COMMAND mavftp_unit_tests)
 endif()
 
+option(BUILD_MAVFTP_SITL_TESTS "Build MAVFTP SITL integration test" OFF)
+if(BUILD_MAVFTP_SITL_TESTS)
+    add_executable(mavftp_sitl_tests
+        tests/mavftp/MAVFTPSITLTest.cc
+        src/uas/MAVFTPFileFormats.cc
+        src/uas/MAVFTPFileFormats.h
+        src/uas/MAVFTPProtocol.cc
+        src/uas/MAVFTPProtocol.h
+    )
+    target_include_directories(mavftp_sitl_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/comm
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/uas
+        ${MAVLINKPATH}
+        ${MAVLINKPATH}/${MAVLINK_CONF}
+    )
+    target_compile_definitions(mavftp_sitl_tests PRIVATE
+        QGC_USE_${MAVLINK_CONF}_MESSAGES
+    )
+    target_link_libraries(mavftp_sitl_tests
+        Qt5::Core
+        Qt5::Network
+    )
+endif()
+
 # Platform-specific properties and post-build
 if(APPLE)
     set(MACOSX_BUNDLE_ICON_FILE "icons.icns")
