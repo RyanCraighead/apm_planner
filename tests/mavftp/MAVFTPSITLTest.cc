@@ -642,12 +642,27 @@ bool verifyMission(const QList<mavlink_mission_item_int_t>& items,
 bool runMissionRoundTrip(SitlFtpClient* client, QString* errorString)
 {
     QList<mavlink_mission_item_int_t> mission;
-    mission.append(makeMissionItem(0, MAV_CMD_NAV_WAYPOINT, 473977420, 85459400, 20.0f));
-    mission.append(makeMissionItem(1, MAV_CMD_NAV_WAYPOINT, 473978420, 85459400, 25.0f));
+
+    mavlink_mission_item_int_t home = makeMissionItem(0, MAV_CMD_NAV_WAYPOINT, 0, 0, 0.0f);
+    home.frame = MAV_FRAME_GLOBAL;
+    home.current = 0;
+    mission.append(home);
+
+    for (uint16_t seq = 1; seq <= 7; seq++) {
+        mission.append(makeMissionItem(seq,
+                                       MAV_CMD_NAV_WAYPOINT,
+                                       473977420 + static_cast<int32_t>(seq) * 1000,
+                                       85459400 + static_cast<int32_t>(seq) * 500,
+                                       20.0f + static_cast<float>(seq)));
+    }
 
     const QByteArray uploadData = MAVFTPFileFormats::encodeMissionFile(mission);
     bool uploadChunked = false;
     if (!client->uploadFile(MAVFTPFileFormats::missionPath(), uploadData, &uploadChunked, errorString)) {
+        return false;
+    }
+    if (!uploadChunked) {
+        *errorString = QStringLiteral("mission upload did not prove chunked write handling");
         return false;
     }
 
@@ -657,8 +672,8 @@ bool runMissionRoundTrip(SitlFtpClient* client, QString* errorString)
     if (!client->downloadFile(MAVFTPFileFormats::missionPath(), &downloadData, &sawMultipleChunks, &sawEofNack, errorString)) {
         return false;
     }
-    if (!sawEofNack) {
-        *errorString = QStringLiteral("mission download did not prove EOF handling");
+    if (!sawMultipleChunks || !sawEofNack) {
+        *errorString = QStringLiteral("mission download did not prove chunking and EOF handling");
         return false;
     }
 
