@@ -592,7 +592,7 @@ bool verifyMission(const QList<mavlink_mission_item_int_t>& items, QString* erro
         *errorString = QStringLiteral("expected 2 mission items, got %1").arg(items.count());
         return false;
     }
-    if (items.at(0).command != MAV_CMD_NAV_TAKEOFF || items.at(1).command != MAV_CMD_NAV_WAYPOINT) {
+    if (items.at(0).command != MAV_CMD_NAV_WAYPOINT || items.at(1).command != MAV_CMD_NAV_WAYPOINT) {
         *errorString = QStringLiteral("downloaded mission commands did not match uploaded mission");
         return false;
     }
@@ -610,7 +610,7 @@ bool verifyMission(const QList<mavlink_mission_item_int_t>& items, QString* erro
 bool runMissionRoundTrip(SitlFtpClient* client, QString* errorString)
 {
     QList<mavlink_mission_item_int_t> mission;
-    mission.append(makeMissionItem(0, MAV_CMD_NAV_TAKEOFF, 473977420, 85459400, 20.0f));
+    mission.append(makeMissionItem(0, MAV_CMD_NAV_WAYPOINT, 473977420, 85459400, 20.0f));
     mission.append(makeMissionItem(1, MAV_CMD_NAV_WAYPOINT, 473978420, 85459400, 25.0f));
 
     const QByteArray uploadData = MAVFTPFileFormats::encodeMissionFile(mission);
