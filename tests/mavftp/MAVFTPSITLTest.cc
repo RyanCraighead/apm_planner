@@ -16,6 +16,7 @@
 #include <QtGlobal>
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -48,6 +49,25 @@ quint32 readUInt32(const QByteArray& data, int offset)
 bool nearlyEqual(double a, double b)
 {
     return std::fabs(a - b) < 0.001;
+}
+
+bool coordinateNearlyEqual(qint32 a, qint32 b)
+{
+    return std::llabs(static_cast<long long>(a) - static_cast<long long>(b)) <= 100;
+}
+
+QString missionItemSummary(const mavlink_mission_item_int_t& item)
+{
+    return QStringLiteral("seq=%1 cmd=%2 frame=%3 x=%4 y=%5 z=%6 current=%7 autocontinue=%8 type=%9")
+            .arg(static_cast<int>(item.seq))
+            .arg(static_cast<int>(item.command))
+            .arg(static_cast<int>(item.frame))
+            .arg(item.x)
+            .arg(item.y)
+            .arg(static_cast<double>(item.z))
+            .arg(static_cast<int>(item.current))
+            .arg(static_cast<int>(item.autocontinue))
+            .arg(static_cast<int>(item.mission_type));
 }
 
 double variantToDouble(const QVariant& value)
@@ -586,24 +606,36 @@ mavlink_mission_item_int_t makeMissionItem(uint16_t seq, uint16_t command, int32
     return item;
 }
 
-bool verifyMission(const QList<mavlink_mission_item_int_t>& items, QString* errorString)
+bool verifyMission(const QList<mavlink_mission_item_int_t>& items,
+                   const QList<mavlink_mission_item_int_t>& expected,
+                   QString* errorString)
 {
-    if (items.count() != 2) {
-        *errorString = QStringLiteral("expected 2 mission items, got %1").arg(items.count());
+    if (items.count() != expected.count()) {
+        *errorString = QStringLiteral("expected %1 mission items, got %2")
+                .arg(expected.count())
+                .arg(items.count());
         return false;
     }
-    if (items.at(0).command != MAV_CMD_NAV_WAYPOINT || items.at(1).command != MAV_CMD_NAV_WAYPOINT) {
-        *errorString = QStringLiteral("downloaded mission commands did not match uploaded mission");
-        return false;
+
+    for (int i = 0; i < expected.count(); i++) {
+        const mavlink_mission_item_int_t& actualItem = items.at(i);
+        const mavlink_mission_item_int_t& expectedItem = expected.at(i);
+        const bool matches = actualItem.command == expectedItem.command &&
+                actualItem.frame == expectedItem.frame &&
+                actualItem.mission_type == expectedItem.mission_type &&
+                coordinateNearlyEqual(actualItem.x, expectedItem.x) &&
+                coordinateNearlyEqual(actualItem.y, expectedItem.y) &&
+                std::fabs(actualItem.z - expectedItem.z) <= 0.01f;
+
+        if (!matches) {
+            *errorString = QStringLiteral("downloaded mission item %1 did not match uploaded mission: actual [%2], expected [%3]")
+                    .arg(i)
+                    .arg(missionItemSummary(actualItem))
+                    .arg(missionItemSummary(expectedItem));
+            return false;
+        }
     }
-    if (items.at(0).x != 473977420 || items.at(1).y != 85459400) {
-        *errorString = QStringLiteral("downloaded mission coordinates did not match uploaded mission");
-        return false;
-    }
-    if (std::fabs(items.at(0).z - 20.0f) > 0.001f || std::fabs(items.at(1).z - 25.0f) > 0.001f) {
-        *errorString = QStringLiteral("downloaded mission altitudes did not match uploaded mission");
-        return false;
-    }
+
     return true;
 }
 
@@ -634,7 +666,7 @@ bool runMissionRoundTrip(SitlFtpClient* client, QString* errorString)
     if (!MAVFTPFileFormats::parseMissionFile(downloadData, &downloadedMission, errorString)) {
         return false;
     }
-    if (!verifyMission(downloadedMission, errorString)) {
+    if (!verifyMission(downloadedMission, mission, errorString)) {
         return false;
     }
 
