@@ -482,7 +482,7 @@ bool chooseSafeParameter(const QList<MAVFTPFileFormats::ParameterValue>& paramet
         qMakePair(QStringLiteral("PILOT_SPEED_UP"), qMakePair(250.0, 300.0))
     };
 
-    foreach (const QPair<QString, QPair<double, double> >& candidate, candidates) {
+    for (const QPair<QString, QPair<double, double> >& candidate : candidates) {
         MAVFTPFileFormats::ParameterValue parameter;
         if (!findParameter(parameters, candidate.first, &parameter)) {
             continue;
