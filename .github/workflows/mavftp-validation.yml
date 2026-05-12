@@ -154,10 +154,17 @@ jobs:
             libqt5serialport5-dev \
             libqt5svg5-dev
 
-      - name: Install ArduPilot prerequisites
-        working-directory: ardupilot
+      - name: Install ArduPilot Python prerequisites
         run: |
-          Tools/environment_install/install-prereqs-ubuntu.sh -y
+          python3 -m pip install --user --progress-bar off -U \
+            empy==3.3.4 \
+            future \
+            intelhex \
+            lxml \
+            pexpect \
+            ptyprocess \
+            pymavlink \
+            pyserial
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Build APM Planner SITL test
