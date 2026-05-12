@@ -20,6 +20,7 @@ the Free Software Foundation, either version 3 of the License, or
 #include <QString>
 #include <QTimer>
 
+#include "MAVFTPProtocol.h"
 #include "QGCMAVLink.h"
 
 #include <stdint.h>
@@ -69,43 +70,7 @@ private:
         UploadTransfer
     };
 
-    enum Opcode
-    {
-        OpTerminateSession = 1,
-        OpOpenFileRO = 4,
-        OpReadFile = 5,
-        OpCreateFile = 6,
-        OpWriteFile = 7,
-        OpAck = 128,
-        OpNack = 129
-    };
-
-    enum ErrorCode
-    {
-        ErrNone = 0,
-        ErrFail = 1,
-        ErrFailErrno = 2,
-        ErrInvalidDataSize = 3,
-        ErrInvalidSession = 4,
-        ErrNoSessionsAvailable = 5,
-        ErrEndOfFile = 6,
-        ErrUnknownCommand = 7,
-        ErrFileExists = 8,
-        ErrFileProtected = 9,
-        ErrFileNotFound = 10
-    };
-
-    struct Response
-    {
-        quint16 sequence;
-        uint8_t session;
-        uint8_t opcode;
-        uint8_t size;
-        uint8_t requestOpcode;
-        uint8_t burstComplete;
-        quint32 offset;
-        QByteArray data;
-    };
+    typedef MAVFTPProtocol::Packet Response;
 
     LinkInterface* activeLink() const;
     bool sendRequest(uint8_t opcode, uint8_t size, quint32 offset, const QByteArray& data, bool retrying = false);
@@ -122,18 +87,10 @@ private:
     void reset();
 
     quint16 expectedResponseSequence() const;
-    static uint8_t responseErrorCode(const Response& response);
-    static void writeUInt16(uint8_t* bytes, quint16 value);
-    static void writeUInt32(uint8_t* bytes, quint32 value);
-    static quint16 readUInt16(const uint8_t* bytes);
-    static quint32 readUInt32(const uint8_t* bytes);
-    static QString errorString(uint8_t errorCode);
 
     enum
     {
-        kHeaderLength = 12,
-        kPayloadLength = MAVLINK_MSG_FILE_TRANSFER_PROTOCOL_FIELD_PAYLOAD_LEN,
-        kMaxDataLength = MAVLINK_MSG_FILE_TRANSFER_PROTOCOL_FIELD_PAYLOAD_LEN - kHeaderLength,
+        kMaxDataLength = MAVFTPProtocol::MaxDataLength,
         kTimeoutMs = 1000,
         kMaxRetries = 3
     };

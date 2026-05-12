@@ -16,6 +16,8 @@ the Free Software Foundation, either version 3 of the License, or
 #include "MAVFTPManager.h"
 
 #include "LinkInterface.h"
+#include "MAVFTPFileFormats.h"
+#include "MAVFTPProtocol.h"
 #include "UAS.h"
 #include "logging.h"
 
@@ -52,7 +54,7 @@ bool MAVFTPManager::isBusy() const
 
 bool MAVFTPManager::downloadParameterFile()
 {
-    return downloadFile(QStringLiteral("@PARAM/param.pck?withdefaults=1"), MAV_COMP_ID_PRIMARY);
+    return downloadFile(MAVFTPFileFormats::parameterDownloadPath(), MAV_COMP_ID_PRIMARY);
 }
 
 bool MAVFTPManager::downloadFile(const QString& remotePath, uint8_t targetComponent)
@@ -85,7 +87,7 @@ bool MAVFTPManager::downloadFile(const QString& remotePath, uint8_t targetCompon
     _state = Opening;
 
     QLOG_DEBUG() << "Starting MAVFTP download of" << remotePath;
-    if (!sendRequest(OpOpenFileRO, static_cast<uint8_t>(path.size()), 0, path)) {
+    if (!sendRequest(MAVFTPProtocol::OpOpenFileRO, static_cast<uint8_t>(path.size()), 0, path)) {
         reset();
         return false;
     }
@@ -123,7 +125,7 @@ bool MAVFTPManager::uploadFile(const QString& remotePath, const QByteArray& data
     _state = Creating;
 
     QLOG_DEBUG() << "Starting MAVFTP upload of" << remotePath << "with" << data.size() << "bytes";
-    if (!sendRequest(OpCreateFile, static_cast<uint8_t>(path.size()), 0, path)) {
+    if (!sendRequest(MAVFTPProtocol::OpCreateFile, static_cast<uint8_t>(path.size()), 0, path)) {
         reset();
         return false;
     }
@@ -146,11 +148,11 @@ bool MAVFTPManager::handleMessage(LinkInterface* link, const mavlink_message_t& 
     }
 
     const uint8_t expectedRequestOpcode =
-            _state == Opening ? OpOpenFileRO :
-            _state == Reading ? OpReadFile :
-            _state == Creating ? OpCreateFile :
-            _state == Writing ? OpWriteFile :
-            _state == Closing ? OpTerminateSession : 0;
+            _state == Opening ? MAVFTPProtocol::OpOpenFileRO :
+            _state == Reading ? MAVFTPProtocol::OpReadFile :
+            _state == Creating ? MAVFTPProtocol::OpCreateFile :
+            _state == Writing ? MAVFTPProtocol::OpWriteFile :
+            _state == Closing ? MAVFTPProtocol::OpTerminateSession : 0;
     if (response.requestOpcode != expectedRequestOpcode) {
         return false;
     }
@@ -160,7 +162,7 @@ bool MAVFTPManager::handleMessage(LinkInterface* link, const mavlink_message_t& 
     if ((_state == Reading || _state == Writing || _state == Closing) && response.session != _session) {
         return false;
     }
-    if (_state == Reading && response.opcode == OpAck && response.offset < _offset) {
+    if (_state == Reading && response.opcode == MAVFTPProtocol::OpAck && response.offset < _offset) {
         return false;
     }
     _timer.stop();
@@ -195,7 +197,7 @@ void MAVFTPManager::cancel()
         return;
     }
 
-    sendRequest(OpTerminateSession, 0, 0, QByteArray());
+    sendRequest(MAVFTPProtocol::OpTerminateSession, 0, 0, QByteArray());
     finish(QStringLiteral("MAVFTP transfer cancelled"));
 }
 
@@ -237,27 +239,17 @@ bool MAVFTPManager::sendRequest(uint8_t opcode, uint8_t size, quint32 offset, co
         return false;
     }
 
-    uint8_t payload[kPayloadLength];
-    memset(payload, 0, sizeof(payload));
-
     const quint16 requestSequence = retrying ? _lastSequence : _sequence;
     if (!retrying) {
         _sequence = static_cast<quint16>(_sequence + 2);
     }
-    writeUInt16(&payload[0], requestSequence);
-    payload[2] = _session;
-    payload[3] = opcode;
-    payload[4] = size;
-    payload[5] = 0;
-    payload[6] = 0;
-    payload[7] = 0;
-    writeUInt32(&payload[8], offset);
 
-    if (!data.isEmpty()) {
-        if (data.size() > kMaxDataLength) {
-            return false;
-        }
-        memcpy(&payload[kHeaderLength], data.constData(), data.size());
+    uint8_t payload[MAVFTPProtocol::PayloadLength];
+    QString encodeError;
+    if (!MAVFTPProtocol::encodePayload(requestSequence, _session, opcode, size, offset, data,
+                                       payload, MAVFTPProtocol::PayloadLength, &encodeError)) {
+        QLOG_WARN() << encodeError;
+        return false;
     }
 
     mavlink_message_t message;
@@ -299,30 +291,23 @@ bool MAVFTPManager::decodeResponse(const mavlink_message_t& message, Response* r
         return false;
     }
 
-    response->sequence = readUInt16(&packet.payload[0]);
-    response->session = packet.payload[2];
-    response->opcode = packet.payload[3];
-    response->size = packet.payload[4];
-    response->requestOpcode = packet.payload[5];
-    response->burstComplete = packet.payload[6];
-    response->offset = readUInt32(&packet.payload[8]);
-    if (response->size > kMaxDataLength) {
+    QString decodeError;
+    if (!MAVFTPProtocol::decodePayload(packet.payload, MAVFTPProtocol::PayloadLength, response, &decodeError)) {
+        QLOG_WARN() << decodeError;
         return false;
     }
-
-    response->data = QByteArray(reinterpret_cast<const char*>(&packet.payload[kHeaderLength]), response->size);
     return true;
 }
 
 void MAVFTPManager::handleOpenResponse(const Response& response)
 {
-    if (response.requestOpcode != OpOpenFileRO) {
+    if (response.requestOpcode != MAVFTPProtocol::OpOpenFileRO) {
         return;
     }
 
-    if (response.opcode != OpAck) {
-        const uint8_t errorCode = responseErrorCode(response);
-        finish(QStringLiteral("MAVFTP open failed: %1").arg(errorString(errorCode)));
+    if (response.opcode != MAVFTPProtocol::OpAck) {
+        const uint8_t errorCode = MAVFTPProtocol::responseErrorCode(response);
+        finish(QStringLiteral("MAVFTP open failed: %1").arg(MAVFTPProtocol::errorString(errorCode)));
         return;
     }
 
@@ -336,24 +321,24 @@ void MAVFTPManager::handleOpenResponse(const Response& response)
 
 void MAVFTPManager::handleReadResponse(const Response& response)
 {
-    if (response.requestOpcode != OpReadFile) {
+    if (response.requestOpcode != MAVFTPProtocol::OpReadFile) {
         return;
     }
 
-    if (response.opcode == OpNack) {
-        const uint8_t errorCode = responseErrorCode(response);
-        if (errorCode == ErrEndOfFile || errorCode == ErrNone) {
+    if (response.opcode == MAVFTPProtocol::OpNack) {
+        const uint8_t errorCode = MAVFTPProtocol::responseErrorCode(response);
+        if (errorCode == MAVFTPProtocol::ErrEndOfFile || errorCode == MAVFTPProtocol::ErrNone) {
             if (!sendTerminateRequest()) {
                 finish(QStringLiteral("MAVFTP close request could not be sent"));
             }
             return;
         }
 
-        finish(QStringLiteral("MAVFTP read failed: %1").arg(errorString(errorCode)));
+        finish(QStringLiteral("MAVFTP read failed: %1").arg(MAVFTPProtocol::errorString(errorCode)));
         return;
     }
 
-    if (response.opcode != OpAck || response.offset != _offset) {
+    if (response.opcode != MAVFTPProtocol::OpAck || response.offset != _offset) {
         finish(QStringLiteral("MAVFTP received an unexpected read response"));
         return;
     }
@@ -375,13 +360,13 @@ void MAVFTPManager::handleReadResponse(const Response& response)
 
 void MAVFTPManager::handleCreateResponse(const Response& response)
 {
-    if (response.requestOpcode != OpCreateFile) {
+    if (response.requestOpcode != MAVFTPProtocol::OpCreateFile) {
         return;
     }
 
-    if (response.opcode != OpAck) {
-        const uint8_t errorCode = responseErrorCode(response);
-        finish(QStringLiteral("MAVFTP create failed: %1").arg(errorString(errorCode)));
+    if (response.opcode != MAVFTPProtocol::OpAck) {
+        const uint8_t errorCode = MAVFTPProtocol::responseErrorCode(response);
+        finish(QStringLiteral("MAVFTP create failed: %1").arg(MAVFTPProtocol::errorString(errorCode)));
         return;
     }
 
@@ -403,17 +388,17 @@ void MAVFTPManager::handleCreateResponse(const Response& response)
 
 void MAVFTPManager::handleWriteResponse(const Response& response)
 {
-    if (response.requestOpcode != OpWriteFile) {
+    if (response.requestOpcode != MAVFTPProtocol::OpWriteFile) {
         return;
     }
 
-    if (response.opcode == OpNack) {
-        const uint8_t errorCode = responseErrorCode(response);
-        finish(QStringLiteral("MAVFTP write failed: %1").arg(errorString(errorCode)));
+    if (response.opcode == MAVFTPProtocol::OpNack) {
+        const uint8_t errorCode = MAVFTPProtocol::responseErrorCode(response);
+        finish(QStringLiteral("MAVFTP write failed: %1").arg(MAVFTPProtocol::errorString(errorCode)));
         return;
     }
 
-    if (response.opcode != OpAck || response.offset != _offset) {
+    if (response.opcode != MAVFTPProtocol::OpAck || response.offset != _offset) {
         finish(QStringLiteral("MAVFTP received an unexpected write response"));
         return;
     }
@@ -433,13 +418,13 @@ void MAVFTPManager::handleWriteResponse(const Response& response)
 
 void MAVFTPManager::handleTerminateResponse(const Response& response)
 {
-    if (response.requestOpcode != OpTerminateSession) {
+    if (response.requestOpcode != MAVFTPProtocol::OpTerminateSession) {
         return;
     }
 
-    if (response.opcode != OpAck) {
-        const uint8_t errorCode = responseErrorCode(response);
-        finish(QStringLiteral("MAVFTP close failed: %1").arg(errorString(errorCode)));
+    if (response.opcode != MAVFTPProtocol::OpAck) {
+        const uint8_t errorCode = MAVFTPProtocol::responseErrorCode(response);
+        finish(QStringLiteral("MAVFTP close failed: %1").arg(MAVFTPProtocol::errorString(errorCode)));
         return;
     }
 
@@ -448,7 +433,7 @@ void MAVFTPManager::handleTerminateResponse(const Response& response)
 
 bool MAVFTPManager::sendReadRequest()
 {
-    return sendRequest(OpReadFile, static_cast<uint8_t>(kMaxDataLength), _offset, QByteArray());
+    return sendRequest(MAVFTPProtocol::OpReadFile, static_cast<uint8_t>(kMaxDataLength), _offset, QByteArray());
 }
 
 bool MAVFTPManager::sendWriteRequest()
@@ -460,13 +445,13 @@ bool MAVFTPManager::sendWriteRequest()
     }
 
     const QByteArray data = _upload.mid(static_cast<int>(_offset), writeSize);
-    return sendRequest(OpWriteFile, static_cast<uint8_t>(data.size()), _offset, data);
+    return sendRequest(MAVFTPProtocol::OpWriteFile, static_cast<uint8_t>(data.size()), _offset, data);
 }
 
 bool MAVFTPManager::sendTerminateRequest()
 {
     _state = Closing;
-    return sendRequest(OpTerminateSession, 0, 0, QByteArray());
+    return sendRequest(MAVFTPProtocol::OpTerminateSession, 0, 0, QByteArray());
 }
 
 void MAVFTPManager::finish(const QString& errorString)
@@ -507,72 +492,5 @@ void MAVFTPManager::reset()
 
 quint16 MAVFTPManager::expectedResponseSequence() const
 {
-    return static_cast<quint16>(_lastSequence + 1);
-}
-
-uint8_t MAVFTPManager::responseErrorCode(const Response& response)
-{
-    if (response.data.isEmpty()) {
-        return static_cast<uint8_t>(ErrFail);
-    }
-
-    return static_cast<uint8_t>(static_cast<uchar>(response.data.at(0)));
-}
-
-void MAVFTPManager::writeUInt16(uint8_t* bytes, quint16 value)
-{
-    bytes[0] = static_cast<uint8_t>(value & 0xff);
-    bytes[1] = static_cast<uint8_t>((value >> 8) & 0xff);
-}
-
-void MAVFTPManager::writeUInt32(uint8_t* bytes, quint32 value)
-{
-    bytes[0] = static_cast<uint8_t>(value & 0xff);
-    bytes[1] = static_cast<uint8_t>((value >> 8) & 0xff);
-    bytes[2] = static_cast<uint8_t>((value >> 16) & 0xff);
-    bytes[3] = static_cast<uint8_t>((value >> 24) & 0xff);
-}
-
-quint16 MAVFTPManager::readUInt16(const uint8_t* bytes)
-{
-    return static_cast<quint16>(bytes[0]) |
-            (static_cast<quint16>(bytes[1]) << 8);
-}
-
-quint32 MAVFTPManager::readUInt32(const uint8_t* bytes)
-{
-    return static_cast<quint32>(bytes[0]) |
-            (static_cast<quint32>(bytes[1]) << 8) |
-            (static_cast<quint32>(bytes[2]) << 16) |
-            (static_cast<quint32>(bytes[3]) << 24);
-}
-
-QString MAVFTPManager::errorString(uint8_t errorCode)
-{
-    switch (errorCode) {
-    case ErrNone:
-        return QStringLiteral("no error");
-    case ErrFail:
-        return QStringLiteral("generic failure");
-    case ErrFailErrno:
-        return QStringLiteral("system error");
-    case ErrInvalidDataSize:
-        return QStringLiteral("invalid data size");
-    case ErrInvalidSession:
-        return QStringLiteral("invalid session");
-    case ErrNoSessionsAvailable:
-        return QStringLiteral("no sessions available");
-    case ErrEndOfFile:
-        return QStringLiteral("end of file");
-    case ErrUnknownCommand:
-        return QStringLiteral("unknown command");
-    case ErrFileExists:
-        return QStringLiteral("file exists");
-    case ErrFileProtected:
-        return QStringLiteral("file protected");
-    case ErrFileNotFound:
-        return QStringLiteral("file not found");
-    default:
-        return QStringLiteral("unknown error %1").arg(errorCode);
-    }
+    return MAVFTPProtocol::expectedResponseSequence(_lastSequence);
 }

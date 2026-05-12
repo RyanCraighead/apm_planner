@@ -97,3 +97,7 @@ jobs:
       - name: Build
         run: |
           cmake --build /tmp/apm-planner-cmake --parallel 2
+
+      - name: Run MAVFTP unit tests
+        run: |
+          ctest --test-dir /tmp/apm-planner-cmake --output-on-failure

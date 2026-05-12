@@ -31,6 +31,7 @@ This file is part of the QGROUNDCONTROL project
 
 #include "logging.h"
 #include "UASWaypointManager.h"
+#include "MAVFTPFileFormats.h"
 #include "MAVFTPManager.h"
 #include "UAS.h"
 #include "configuration.h"
@@ -43,108 +44,6 @@ This file is part of the QGROUNDCONTROL project
 #define PROTOCOL_MAX_RETRIES 5      ///< maximum number of send retries (after timeout)
 
 static const QString DEFAULT_REL_ALT = "defaultRelAltitude";
-
-namespace {
-
-const char* const kMavftpMissionPath = "@MISSION/mission.dat";
-const quint16 kMavftpMissionMagic = 0x763d;
-const int kMavftpMissionHeaderLength = 10;
-
-quint16 readUInt16(const QByteArray& data, int offset)
-{
-    const uchar* bytes = reinterpret_cast<const uchar*>(data.constData() + offset);
-    return static_cast<quint16>(bytes[0]) |
-            (static_cast<quint16>(bytes[1]) << 8);
-}
-
-quint32 readUInt32(const QByteArray& data, int offset)
-{
-    const uchar* bytes = reinterpret_cast<const uchar*>(data.constData() + offset);
-    return static_cast<quint32>(bytes[0]) |
-            (static_cast<quint32>(bytes[1]) << 8) |
-            (static_cast<quint32>(bytes[2]) << 16) |
-            (static_cast<quint32>(bytes[3]) << 24);
-}
-
-int32_t readInt32(const QByteArray& data, int offset)
-{
-    const quint32 rawValue = readUInt32(data, offset);
-    int32_t value = 0;
-    memcpy(&value, &rawValue, sizeof(value));
-    return value;
-}
-
-float readFloat(const QByteArray& data, int offset)
-{
-    const quint32 rawValue = readUInt32(data, offset);
-    float value = 0.0f;
-    memcpy(&value, &rawValue, sizeof(value));
-    return value;
-}
-
-void appendUInt16(QByteArray* data, quint16 value)
-{
-    data->append(static_cast<char>(value & 0xff));
-    data->append(static_cast<char>((value >> 8) & 0xff));
-}
-
-void appendUInt32(QByteArray* data, quint32 value)
-{
-    data->append(static_cast<char>(value & 0xff));
-    data->append(static_cast<char>((value >> 8) & 0xff));
-    data->append(static_cast<char>((value >> 16) & 0xff));
-    data->append(static_cast<char>((value >> 24) & 0xff));
-}
-
-void appendFloat(QByteArray* data, float value)
-{
-    quint32 rawValue = 0;
-    memcpy(&rawValue, &value, sizeof(rawValue));
-    appendUInt32(data, rawValue);
-}
-
-void appendMissionItem(QByteArray* data, const mavlink_mission_item_int_t& item)
-{
-    appendFloat(data, item.param1);
-    appendFloat(data, item.param2);
-    appendFloat(data, item.param3);
-    appendFloat(data, item.param4);
-    appendUInt32(data, static_cast<quint32>(item.x));
-    appendUInt32(data, static_cast<quint32>(item.y));
-    appendFloat(data, item.z);
-    appendUInt16(data, item.seq);
-    appendUInt16(data, item.command);
-    data->append(static_cast<char>(item.target_system));
-    data->append(static_cast<char>(item.target_component));
-    data->append(static_cast<char>(item.frame));
-    data->append(static_cast<char>(item.current));
-    data->append(static_cast<char>(item.autocontinue));
-    data->append(static_cast<char>(item.mission_type));
-}
-
-mavlink_mission_item_int_t readMissionItem(const QByteArray& data, int offset)
-{
-    mavlink_mission_item_int_t item;
-    memset(&item, 0, sizeof(item));
-    item.param1 = readFloat(data, offset);
-    item.param2 = readFloat(data, offset + 4);
-    item.param3 = readFloat(data, offset + 8);
-    item.param4 = readFloat(data, offset + 12);
-    item.x = readInt32(data, offset + 16);
-    item.y = readInt32(data, offset + 20);
-    item.z = readFloat(data, offset + 24);
-    item.seq = readUInt16(data, offset + 28);
-    item.command = readUInt16(data, offset + 30);
-    item.target_system = static_cast<uint8_t>(data.at(offset + 32));
-    item.target_component = static_cast<uint8_t>(data.at(offset + 33));
-    item.frame = static_cast<uint8_t>(data.at(offset + 34));
-    item.current = static_cast<uint8_t>(data.at(offset + 35));
-    item.autocontinue = static_cast<uint8_t>(data.at(offset + 36));
-    item.mission_type = static_cast<uint8_t>(data.at(offset + 37));
-    return item;
-}
-
-} // namespace
 
 UASWaypointManager::UASWaypointManager(UAS* _uas)
     : uas(_uas),
@@ -1026,7 +925,7 @@ bool UASWaypointManager::tryReadWaypointsViaMavftp(bool readToEdit)
     emit waypointViewOnlyListChanged();
     emit updateStatusString(QStringLiteral("Requesting waypoint list via MAVFTP..."));
 
-    if (!ftp->downloadFile(QString::fromLatin1(kMavftpMissionPath), MAV_COMP_ID_PRIMARY)) {
+    if (!ftp->downloadFile(MAVFTPFileFormats::missionPath(), MAV_COMP_ID_PRIMARY)) {
         mavftpReadActive = false;
         current_state = WP_IDLE;
         current_partner_systemid = 0;
@@ -1058,7 +957,7 @@ bool UASWaypointManager::tryWriteWaypointsViaMavftp()
     current_partner_compid = MAV_COMP_ID_PRIMARY;
 
     emit updateStatusString(QStringLiteral("Uploading waypoint list via MAVFTP..."));
-    if (!ftp->uploadFile(QString::fromLatin1(kMavftpMissionPath), missionData, MAV_COMP_ID_PRIMARY)) {
+    if (!ftp->uploadFile(MAVFTPFileFormats::missionPath(), missionData, MAV_COMP_ID_PRIMARY)) {
         mavftpWriteActive = false;
         current_state = WP_IDLE;
         current_count = 0;
@@ -1072,7 +971,7 @@ bool UASWaypointManager::tryWriteWaypointsViaMavftp()
 
 void UASWaypointManager::mavftpMissionDownloadComplete(const QString& remotePath, const QByteArray& data, const QString& errorString)
 {
-    if (!mavftpReadActive || remotePath != QString::fromLatin1(kMavftpMissionPath)) {
+    if (!mavftpReadActive || remotePath != MAVFTPFileFormats::missionPath()) {
         return;
     }
 
@@ -1108,7 +1007,7 @@ void UASWaypointManager::mavftpMissionDownloadComplete(const QString& remotePath
 
 void UASWaypointManager::mavftpMissionUploadComplete(const QString& remotePath, const QString& errorString)
 {
-    if (!mavftpWriteActive || remotePath != QString::fromLatin1(kMavftpMissionPath)) {
+    if (!mavftpWriteActive || remotePath != MAVFTPFileFormats::missionPath()) {
         return;
     }
 
@@ -1131,41 +1030,8 @@ void UASWaypointManager::mavftpMissionUploadComplete(const QString& remotePath, 
 
 bool UASWaypointManager::loadMissionFromMavftpData(const QByteArray& data, bool readToEdit, QString* errorString)
 {
-    if (data.size() < kMavftpMissionHeaderLength) {
-        if (errorString) {
-            *errorString = QStringLiteral("mission file is too short");
-        }
-        return false;
-    }
-
-    const quint16 magic = readUInt16(data, 0);
-    const quint16 dataType = readUInt16(data, 2);
-    const quint16 start = readUInt16(data, 6);
-    const quint16 itemCount = readUInt16(data, 8);
-    const int expectedSize = kMavftpMissionHeaderLength + itemCount * MAVLINK_MSG_ID_MISSION_ITEM_INT_LEN;
-
-    if (magic != kMavftpMissionMagic) {
-        if (errorString) {
-            *errorString = QStringLiteral("invalid mission file magic 0x%1").arg(magic, 4, 16, QLatin1Char('0'));
-        }
-        return false;
-    }
-    if (dataType != MAV_MISSION_TYPE_MISSION) {
-        if (errorString) {
-            *errorString = QStringLiteral("unsupported mission type %1").arg(dataType);
-        }
-        return false;
-    }
-    if (start != 0) {
-        if (errorString) {
-            *errorString = QStringLiteral("partial mission file starts at %1").arg(start);
-        }
-        return false;
-    }
-    if (data.size() < expectedSize) {
-        if (errorString) {
-            *errorString = QStringLiteral("mission file has %1 bytes, expected at least %2").arg(data.size()).arg(expectedSize);
-        }
+    QList<mavlink_mission_item_int_t> items;
+    if (!MAVFTPFileFormats::parseMissionFile(data, &items, errorString)) {
         return false;
     }
 
@@ -1180,9 +1046,8 @@ bool UASWaypointManager::loadMissionFromMavftpData(const QByteArray& data, bool 
         emit waypointEditableListChanged();
     }
 
-    for (int i = 0; i < itemCount; i++) {
-        const int itemOffset = kMavftpMissionHeaderLength + i * MAVLINK_MSG_ID_MISSION_ITEM_INT_LEN;
-        const mavlink_mission_item_int_t item = readMissionItem(data, itemOffset);
+    for (int i = 0; i < items.count(); i++) {
+        const mavlink_mission_item_int_t item = items.at(i);
         const double wp_x = item.x / static_cast<double>(1E7);
         const double wp_y = item.y / static_cast<double>(1E7);
 
@@ -1205,16 +1070,7 @@ bool UASWaypointManager::loadMissionFromMavftpData(const QByteArray& data, bool 
 
 QByteArray UASWaypointManager::buildMavftpMissionData() const
 {
-    QByteArray data;
-    const quint16 itemCount = static_cast<quint16>(waypointsEditable.count());
-    data.reserve(kMavftpMissionHeaderLength + itemCount * MAVLINK_MSG_ID_MISSION_ITEM_INT_LEN);
-
-    appendUInt16(&data, kMavftpMissionMagic);
-    appendUInt16(&data, MAV_MISSION_TYPE_MISSION);
-    appendUInt16(&data, 0);
-    appendUInt16(&data, 0);
-    appendUInt16(&data, itemCount);
-
+    QList<mavlink_mission_item_int_t> items;
     bool noCurrent = true;
     for (int i = 0; i < waypointsEditable.count(); i++) {
         const Waypoint* waypoint = waypointsEditable.at(i);
@@ -1227,10 +1083,10 @@ QByteArray UASWaypointManager::buildMavftpMissionData() const
         }
 
         const mavlink_mission_item_int_t item = waypointToMissionItem(waypoint, static_cast<quint16>(i), current);
-        appendMissionItem(&data, item);
+        items.append(item);
     }
 
-    return data;
+    return MAVFTPFileFormats::encodeMissionFile(items);
 }
 
 mavlink_mission_item_int_t UASWaypointManager::waypointToMissionItem(const Waypoint* waypoint, quint16 seq, bool current) const
