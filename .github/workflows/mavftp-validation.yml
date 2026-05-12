@@ -1,0 +1,99 @@
+name: MAVFTP validation
+
+on:
+  push:
+    branches:
+      - codex/mavftp-actions-validation
+  workflow_dispatch:
+
+jobs:
+  linux-qmake-build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            ccache \
+            flite1-dev \
+            libgl1-mesa-dev \
+            libsndfile1-dev \
+            libsdl1.2-dev \
+            libsdl2-dev \
+            libssl-dev \
+            libudev-dev \
+            libxkbcommon-x11-0 \
+            libxcb-xinerama0 \
+            libqt5datavisualization5-dev \
+            libqt5opengl5-dev \
+            libqt5serialport5-dev \
+            libqt5svg5-dev \
+            make \
+            python3-pexpect \
+            python3-serial \
+            qt5-qmake \
+            qtbase5-dev \
+            qtdeclarative5-dev \
+            wget
+
+      - name: Show Qt version
+        run: |
+          qmake -v
+
+      - name: Configure with qmake
+        run: |
+          mkdir -p /tmp/apm-planner-shadow
+          cd /tmp/apm-planner-shadow
+          qmake -r "$GITHUB_WORKSPACE/apm_planner.pro" CONFIG+=debug -spec linux-g++
+
+      - name: Build
+        run: |
+          make -C /tmp/apm-planner-shadow -j2
+
+  linux-cmake-build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            flite1-dev \
+            libgl1-mesa-dev \
+            libsndfile1-dev \
+            libsdl1.2-dev \
+            libsdl2-dev \
+            libssl-dev \
+            libudev-dev \
+            libxkbcommon-x11-0 \
+            libxcb-xinerama0 \
+            libqt5datavisualization5-dev \
+            libqt5opengl5-dev \
+            libqt5serialport5-dev \
+            libqt5svg5-dev \
+            ninja-build \
+            qt5-qmake \
+            qtbase5-dev \
+            qtdeclarative5-dev
+
+      - name: Configure with CMake
+        run: |
+          cmake -S "$GITHUB_WORKSPACE" -B /tmp/apm-planner-cmake -G Ninja
+
+      - name: Build
+        run: |
+          cmake --build /tmp/apm-planner-cmake --parallel 2
